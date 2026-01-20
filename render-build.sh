@@ -2,8 +2,8 @@
 # Exit on error
 set -o errexit
 # Install python3 and pip if missing (usually pre-installed)
-# Install yt-dlp via pip (easiest way on linux)
-pip3 install yt-dlp
+# Force update to the absolute latest version
+pip3 install -U yt-dlp
 
 # Find where yt-dlp was installed and copy it to current directory to be sure
 # Try common locations

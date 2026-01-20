@@ -54,8 +54,9 @@ const commonArgs = [
   '--ignore-errors',
   '--no-warnings',
   '--restrict-filenames',
-  // Bypass: Use Android client to avoid "Sign in" on some IPs
-  '--extractor-args', 'youtube:player_client=android',
+  '--force-ipv4', // CRITICAL: Data centers often have blocked IPv6 ranges
+  '--geo-bypass',
+  '--sleep-requests', '1', // Bit slower to avoid triggering bot detection
 ];
 
 // Add runtime arguments only if on Windows using local binary that might need it, 
@@ -75,10 +76,10 @@ if (fs.existsSync(COOKIES_PATH)) {
 // Helper to execute yt-dlp with retries and different strategies
 const runYtDlp = async (args, url, res) => {
   const strategies = [
-    { name: 'Default (Cookies + Web)', args: [] },
-    { name: 'Android Client (Guest)', args: ['--extractor-args', 'youtube:player_client=android'] }, // Often bypasses bot checks
-    { name: 'iOS Client (Guest)', args: ['--extractor-args', 'youtube:player_client=ios'] },
-    { name: 'TV Client (Guest)', args: ['--extractor-args', 'youtube:player_client=tv'] }
+    { name: 'Android Guest', args: ['--extractor-args', 'youtube:player_client=android'] },
+    { name: 'iOS Guest', args: ['--extractor-args', 'youtube:player_client=ios'] },
+    { name: 'MWeb Guest', args: ['--extractor-args', 'youtube:player_client=mweb,web_embedded'] },
+    { name: 'Web with Cookies', args: [] }
   ];
 
   let lastError;
