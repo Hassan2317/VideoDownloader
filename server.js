@@ -86,59 +86,39 @@ const runYtDlp = async (args, url, res) => {
   for (const strategy of strategies) {
     console.log(`Attempting strategy: ${strategy.name}`);
 
+    let currentArgs = [...args, ...strategy.args];
+
     // For Guest strategies, we might want to IGNORE the cookies file if passing it causes issues,
     // but usually passing cookies + android is verified. 
     // However, if the ACCOUNT is flagged, we want to try WITHOUT cookies.
     // Let's filter out '--cookies' from commonArgs if we are in a 'Guest' strategy fallback.
 
-    let currentArgs = [...args, ...strategy.args];
+    // Correct logic to remove cookies for Guest strategies
     if (strategy.name.includes('Guest')) {
-      // Remove cookies arg if it exists in the base args
-      currentArgs = currentArgs.filter((arg, i) => {
-        // Filter out '--cookies' and the following file path
-        if (arg === '--cookies') return false;
-        // Also remove the path (which is the next item). This is tricky in a simple filter.
-        // Better approach: Rebuild args.
-        return true;
-      });
-
-      // Harder to filter array pairs. Let's just create a Clean common args for guest.
-      const guestCommonArgs = commonArgs.filter(a => a !== '--cookies' && a !== COOKIES_PATH);
-      // We need to replace the 'args' passed in (which might have commonArgs spread already)
-      // This helper refactor is getting complex. 
-      // Simplification: logic inside the Loop.
+      const newArgs = [];
+      let skipNext = false;
+      for (const arg of currentArgs) {
+        if (skipNext) {
+          skipNext = false;
+          continue;
+        }
+        if (arg === '--cookies') {
+          skipNext = true; // Skip this flag AND the next item (the path)
+          continue;
+        }
+        newArgs.push(arg);
+      }
+      currentArgs = newArgs;
     }
 
+    // Also need to remove the path variable if it was added globally outside of 'currentArgs'
+    // But in our code, 'currentArgs' is initialized from 'args'.
+    // If 'args' comes from 'baseInfoArgs' = [...commonArgs, '-j'], then commonArgs has the cookie path.
+    // So iterating currentArgs IS sufficient.
+
     try {
-      const processArgs = [...currentArgs, url];
-      // Special handling for Guest: manually strip cookies if we decide to
-      // actually commonArgs is global. Let's make a local copy.
-
-      const finalProcessArgs = [];
-      let skipNext = false;
-
-      // copying commonArgs logic from the input 'args' is hard because they are already merged.
-      // Instead, we will pass specific "extra args" to this helper and merge them with commonArgs inside.
-      // BUT wait, existing code passes full args.
-      // Let's just try running it. If it fails, next loop.
-
-      // Actually, preventing cookies for Guest is key.
-      if (strategy.name.includes('Guest')) {
-        // Filter out cookies from the input args
-        for (let i = 0; i < currentArgs.length; i++) {
-          if (skipNext) { skipNext = false; continue; }
-          if (currentArgs[i] === '--cookies') {
-            skipNext = true; // skip the path
-            continue;
-          }
-          finalProcessArgs.push(currentArgs[i]);
-        }
-      } else {
-        finalProcessArgs.push(...currentArgs);
-      }
-
       const result = await new Promise((resolve, reject) => {
-        const p = spawn(YTDLP_BIN, [...finalProcessArgs, url], { cwd: path.dirname(process.argv[1]) });
+        const p = spawn(YTDLP_BIN, [...currentArgs, url], { cwd: path.dirname(process.argv[1]) });
         let out = '';
         let err = '';
         p.stdout.on('data', d => out += d.toString());
