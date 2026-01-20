@@ -11,7 +11,12 @@ app.use(express.json());
 
 // Determine the executable name based on OS
 const isWindows = process.platform === 'win32';
-const YTDLP_BIN = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+// Check for local binary first, then global
+import fs from 'fs';
+const localBin = path.join(path.dirname(process.argv[1]), isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+const YTDLP_BIN = fs.existsSync(localBin) ? localBin : (isWindows ? 'yt-dlp.exe' : 'yt-dlp');
+
+console.log(`Using yt-dlp binary at: ${YTDLP_BIN}`);
 
 // Serve static files from the React frontend app
 const distPath = path.join(path.dirname(process.argv[1]), 'dist');
@@ -134,8 +139,10 @@ app.post('/api/info', async (req, res) => {
       audioQualities
     });
   } catch (err) {
-    console.error('Info error:', err);
-    res.status(500).json({ error: 'Failed to get video info. Please check the URL.' });
+    console.error('Info error details:', errorOutput);
+    console.error('Info process exit code:', code); // access from closure not possible here directly easily without refactor, but errorOutput is key.
+    console.error('Full Error Object:', err);
+    res.status(500).json({ error: 'Failed to get video info. Check server logs for details.' });
   }
 });
 
