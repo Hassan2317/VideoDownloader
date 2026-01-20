@@ -19,8 +19,20 @@ const YTDLP_BIN = fs.existsSync(localBin) ? localBin : (isWindows ? 'yt-dlp.exe'
 console.log(`Using yt-dlp binary at: ${YTDLP_BIN}`);
 
 // Serve static files from the React frontend app
+// Serve static files from the React frontend app
 const distPath = path.join(path.dirname(process.argv[1]), 'dist');
 app.use(express.static(distPath));
+
+// Handle Cookies from Environment Variable (for Render/Deployment)
+const COOKIES_PATH = path.join(path.dirname(process.argv[1]), 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES) {
+  try {
+    fs.writeFileSync(COOKIES_PATH, process.env.YOUTUBE_COOKIES);
+    console.log('Cookies file created from environment variable.');
+  } catch (err) {
+    console.error('Failed to create cookies file:', err);
+  }
+}
 
 // Common yt-dlp options
 const commonArgs = [
@@ -40,6 +52,12 @@ if (isWindows) {
   commonArgs.push('--js-runtime', 'node');
 }
 
+// Add cookies if file exists
+if (fs.existsSync(COOKIES_PATH)) {
+  commonArgs.push('--cookies', COOKIES_PATH);
+  console.log('Using cookies for authentication.');
+}
+
 // Get video info
 app.post('/api/info', async (req, res) => {
   const { url } = req.body;
@@ -49,9 +67,10 @@ app.post('/api/info', async (req, res) => {
     return res.status(400).json({ error: 'Only YouTube URLs are supported right now.' });
   }
 
-  try {
-    // Get available formats
+  let output = '';
+  let errorOutput = '';
 
+  try {
     // Use --dump-json (or -j) to get all info in one go. reliably.
     // This includes title, thumbnail, and formats.
     const infoArgs = [
@@ -61,15 +80,12 @@ app.post('/api/info', async (req, res) => {
 
     const infoProcess = spawn(YTDLP_BIN, [...infoArgs, url], { cwd: path.dirname(process.argv[1]) });
 
-    let output = '';
-    let errorOutput = '';
-
     // Increase buffer limit if needed, but usually chunks work fine.
     infoProcess.stdout.on('data', (data) => (output += data.toString()));
     infoProcess.stderr.on('data', (data) => (errorOutput += data.toString()));
 
     await new Promise((resolve, reject) => {
-      infoProcess.on('close', (code) => (code === 0 ? resolve() : reject(new Error(errorOutput))));
+      infoProcess.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Exit code: ${code}`))));
     });
 
     const videoData = JSON.parse(output);
@@ -140,7 +156,6 @@ app.post('/api/info', async (req, res) => {
     });
   } catch (err) {
     console.error('Info error details:', errorOutput);
-    console.error('Info process exit code:', code); // access from closure not possible here directly easily without refactor, but errorOutput is key.
     console.error('Full Error Object:', err);
     res.status(500).json({ error: 'Failed to get video info. Check server logs for details.' });
   }

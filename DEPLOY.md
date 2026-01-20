@@ -78,4 +78,22 @@ If you see `sh: 1: vite: Permission denied`, it means `node_modules` was acciden
    git commit -m "Remove node_modules from git"
    git push
    ```
+   ```
 2. Render will automatically redeploy and clean up the permissions.
+
+### "Sign in to confirm you’re not a bot" (YouTube Blocking)
+If you see this error in the logs, YouTube is blocking Render's server connection. You need to provide cookies.
+
+**Fix**:
+1.  **Get Cookies**:
+    -   Install a browser extension like "Get cookies.txt LOCALLY" (Chrome/Firefox).
+    -   Go to YouTube.com and make sure you are logged out (or use a throwaway account).
+    -   Click the extension to download `cookies.txt`.
+    -   Open the file and copy the **entire content**.
+2.  **Add to Render**:
+    -   Go to your Render Dashboard -> select your service -> **Environment**.
+    -   Add a new Environment Variable:
+        -   **Key**: `YOUTUBE_COOKIES`
+        -   **Value**: Paste the content of your `cookies.txt`.
+    -   Save changes. Render will redeploy.
+3.  **Why**: The app will now "log in" as a real user, bypassing the bot check.
