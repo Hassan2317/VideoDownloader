@@ -158,7 +158,7 @@ function App() {
               <img src="/favicon.png" alt="Logo" className="header-logo" />
               <h1 className="gradient-text">Video Downloader</h1>
             </div>
-            <p className="subtitle">Download content from your youtube in seconds.</p>
+            <p className="subtitle">Download content from your youtube platform in seconds.</p>
 
             <div className="input-group">
               <input
