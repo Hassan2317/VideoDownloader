@@ -54,6 +54,8 @@ const commonArgs = [
   '--ignore-errors',
   '--no-warnings',
   '--restrict-filenames',
+  // Bypass: Use Android client to avoid "Sign in" on some IPs
+  '--extractor-args', 'youtube:player_client=android',
 ];
 
 // Add runtime arguments only if on Windows using local binary that might need it, 
