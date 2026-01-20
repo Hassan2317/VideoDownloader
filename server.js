@@ -24,14 +24,26 @@ const distPath = path.join(path.dirname(process.argv[1]), 'dist');
 app.use(express.static(distPath));
 
 // Handle Cookies from Environment Variable (for Render/Deployment)
-const COOKIES_PATH = path.join(path.dirname(process.argv[1]), 'cookies.txt');
+// Handle Cookies from Environment Variable (for Render/Deployment)
+// We will write to 'cookies.txt' in the current working directory to be safe
+const COOKIES_PATH = path.join(process.cwd(), 'cookies.txt');
+console.log(`Expected cookies path: ${COOKIES_PATH}`);
+
 if (process.env.YOUTUBE_COOKIES) {
   try {
-    fs.writeFileSync(COOKIES_PATH, process.env.YOUTUBE_COOKIES);
-    console.log('Cookies file created from environment variable.');
+    // Write just the value, ensure it's a string
+    const cookiesContent = String(process.env.YOUTUBE_COOKIES).trim();
+    if (cookiesContent.length > 0) {
+      fs.writeFileSync(COOKIES_PATH, cookiesContent);
+      console.log(`Cookies file created successfully. Size: ${cookiesContent.length} bytes`);
+    } else {
+      console.warn('YOUTUBE_COOKIES env var was empty.');
+    }
   } catch (err) {
     console.error('Failed to create cookies file:', err);
   }
+} else {
+  console.warn('YOUTUBE_COOKIES environment variable is NOT set.');
 }
 
 // Common yt-dlp options
