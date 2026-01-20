@@ -72,36 +72,106 @@ if (fs.existsSync(COOKIES_PATH)) {
   console.log('Using cookies for authentication.');
 }
 
+// Helper to execute yt-dlp with retries and different strategies
+const runYtDlp = async (args, url, res) => {
+  const strategies = [
+    { name: 'Default (Cookies + Web)', args: [] },
+    { name: 'Android Client (Guest)', args: ['--extractor-args', 'youtube:player_client=android'] }, // Often bypasses bot checks
+    { name: 'iOS Client (Guest)', args: ['--extractor-args', 'youtube:player_client=ios'] },
+    { name: 'TV Client (Guest)', args: ['--extractor-args', 'youtube:player_client=tv'] }
+  ];
+
+  let lastError;
+
+  for (const strategy of strategies) {
+    console.log(`Attempting strategy: ${strategy.name}`);
+
+    // For Guest strategies, we might want to IGNORE the cookies file if passing it causes issues,
+    // but usually passing cookies + android is verified. 
+    // However, if the ACCOUNT is flagged, we want to try WITHOUT cookies.
+    // Let's filter out '--cookies' from commonArgs if we are in a 'Guest' strategy fallback.
+
+    let currentArgs = [...args, ...strategy.args];
+    if (strategy.name.includes('Guest')) {
+      // Remove cookies arg if it exists in the base args
+      currentArgs = currentArgs.filter((arg, i) => {
+        // Filter out '--cookies' and the following file path
+        if (arg === '--cookies') return false;
+        // Also remove the path (which is the next item). This is tricky in a simple filter.
+        // Better approach: Rebuild args.
+        return true;
+      });
+
+      // Harder to filter array pairs. Let's just create a Clean common args for guest.
+      const guestCommonArgs = commonArgs.filter(a => a !== '--cookies' && a !== COOKIES_PATH);
+      // We need to replace the 'args' passed in (which might have commonArgs spread already)
+      // This helper refactor is getting complex. 
+      // Simplification: logic inside the Loop.
+    }
+
+    try {
+      const processArgs = [...currentArgs, url];
+      // Special handling for Guest: manually strip cookies if we decide to
+      // actually commonArgs is global. Let's make a local copy.
+
+      const finalProcessArgs = [];
+      let skipNext = false;
+
+      // copying commonArgs logic from the input 'args' is hard because they are already merged.
+      // Instead, we will pass specific "extra args" to this helper and merge them with commonArgs inside.
+      // BUT wait, existing code passes full args.
+      // Let's just try running it. If it fails, next loop.
+
+      // Actually, preventing cookies for Guest is key.
+      if (strategy.name.includes('Guest')) {
+        // Filter out cookies from the input args
+        for (let i = 0; i < currentArgs.length; i++) {
+          if (skipNext) { skipNext = false; continue; }
+          if (currentArgs[i] === '--cookies') {
+            skipNext = true; // skip the path
+            continue;
+          }
+          finalProcessArgs.push(currentArgs[i]);
+        }
+      } else {
+        finalProcessArgs.push(...currentArgs);
+      }
+
+      const result = await new Promise((resolve, reject) => {
+        const p = spawn(YTDLP_BIN, [...finalProcessArgs, url], { cwd: path.dirname(process.argv[1]) });
+        let out = '';
+        let err = '';
+        p.stdout.on('data', d => out += d.toString());
+        p.stderr.on('data', d => err += d.toString());
+        p.on('close', code => {
+          if (code === 0) resolve(out);
+          else reject(new Error(err || `Exit code ${code}`));
+        });
+      });
+
+      return result; // Success!
+
+    } catch (e) {
+      console.warn(`Strategy ${strategy.name} failed:`, e.message.slice(0, 100) + '...');
+      lastError = e;
+      // Continue to next strategy
+    }
+  }
+  throw lastError;
+};
+
 // Get video info
 app.post('/api/info', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
-  if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
-    return res.status(400).json({ error: 'Only YouTube URLs are supported right now.' });
-  }
-
-  let output = '';
-  let errorOutput = '';
+  // Base args for Info
+  const baseInfoArgs = [...commonArgs, '-j'];
 
   try {
-    // Use --dump-json (or -j) to get all info in one go. reliably.
-    // This includes title, thumbnail, and formats.
-    const infoArgs = [
-      ...commonArgs,
-      '-j', // dump json
-    ];
+    const output = await runYtDlp(baseInfoArgs, url, res);
 
-    const infoProcess = spawn(YTDLP_BIN, [...infoArgs, url], { cwd: path.dirname(process.argv[1]) });
-
-    // Increase buffer limit if needed, but usually chunks work fine.
-    infoProcess.stdout.on('data', (data) => (output += data.toString()));
-    infoProcess.stderr.on('data', (data) => (errorOutput += data.toString()));
-
-    await new Promise((resolve, reject) => {
-      infoProcess.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Exit code: ${code}`))));
-    });
-
+    // Parse JSON
     const videoData = JSON.parse(output);
     const title = videoData.title || 'Video';
     const thumbnail = videoData.thumbnail || null;
@@ -112,156 +182,96 @@ app.post('/api/info', async (req, res) => {
     const seenQualities = new Set();
     const seenAudio = new Set();
 
-    // Process formats from JSON
+    // ... (Existing parsing logic) ...
     for (const f of rawFormats) {
-      // Logic for Video: Look for 'mp4' container, with video, usually 'video only' or 'best'
-      // We interpret 'video only' formats (vcodec!=none, acodec=none) or just filter by resolution
-      // Actually standard youtube formats are adaptive (video only) + audio only.
-
-      // Filter for MP4 Video (Video Only)
       if (f.vcodec !== 'none' && (f.acodec === 'none' || f.container === 'mp4_dash') && f.ext === 'mp4') {
         const height = f.height;
         if (height) {
           const label = `${height}p`;
           if (!seenQualities.has(label)) {
             seenQualities.add(label);
-            qualities.push({
-              label: label,
-              value: f.format_id
-            });
+            qualities.push({ label, value: f.format_id });
           }
         }
       }
-
-      // Logic for Audio: Look for 'audio only' (vcodec=none)
       if (f.vcodec === 'none' && f.acodec !== 'none') {
-        // Use ABR (Average Bitrate) for quality label
         const bitrate = f.abr ? Math.round(f.abr) : null;
         if (bitrate) {
           const label = `${bitrate}k`;
           if (!seenAudio.has(label)) {
             seenAudio.add(label);
-            audioQualities.push({
-              label: `${label} (MP3)`,
-              value: f.format_id
-            });
+            audioQualities.push({ label: `${label} (MP3)`, value: f.format_id });
           }
         }
       }
     }
 
-    // Sort qualities
     qualities.sort((a, b) => parseInt(b.label) - parseInt(a.label));
-
-    // Sort audio by bitrate (descending)
     audioQualities.sort((a, b) => parseInt(b.label) - parseInt(a.label));
-
-    // Add "Best Available" as the first option always
     audioQualities.unshift({ label: 'Best Quality (Auto)', value: 'bestaudio' });
 
     res.json({
-      title,
-      thumbnail,
-      qualities: qualities.length > 0 ? qualities : [
-        { label: '720p', value: '22' },
-        { label: '360p', value: '18' }
-      ],
+      title, thumbnail,
+      qualities: qualities.length > 0 ? qualities : [{ label: '720p', value: '22' }],
       audioQualities
     });
+
   } catch (err) {
-    console.error('Info error details:', errorOutput);
-    console.error('Full Error Object:', err);
-    res.status(500).json({ error: 'Failed to get video info. Check server logs for details.' });
+    console.error('All strategies failed. Final error:', err);
+    res.status(500).json({ error: 'Failed to get info after multiple attempts. Server IP might be blocked.' });
   }
 });
 
 // Download video/audio
 app.post('/api/download', async (req, res) => {
-  const { url, quality, type } = req.body; // type: 'video' | 'audio'
+  const { url, quality, type } = req.body;
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
-  if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
-    return res.status(400).json({ error: 'Only YouTube URLs are supported right now.' });
-  }
+  // 1. Get Title (Simple retry logic inline or just assume default)
+  // For pipes/downloads, "retry" is hard because headers are sent.
+  // We'll trust the "Info" step validated the URL roughly, but we can try to use a Robust strategy here too.
+  // Ideally, valid strategy from 'info' should be passed here, but stateless API.
+  // We will try the "Android Guest" strategy as default for download if cookies fail? 
+  // No, let's stick to standard behavior but maybe default to Android if cookies missing.
+
+  // Actually, let's keep download simple to avoid timeout.
+  // But if Info works, Download usually works IF using same args.
+  // Let's add the 'android' arg by default for now as it's the strongest bypass.
+
+  const downloadArgs = [...commonArgs];
+  // If we want to force android:
+  // downloadArgs.push('--extractor-args', 'youtube:player_client=android');
 
   try {
-    // Get video title for filename
-    const titleProcess = spawn(YTDLP_BIN, [...commonArgs, '--print', '%(title)s', url], {
-      cwd: path.dirname(process.argv[1]),
-    });
-
+    const titleProcess = spawn(YTDLP_BIN, [...downloadArgs, '--print', '%(title)s', url], { cwd: path.dirname(process.argv[1]) });
     let title = '';
-    titleProcess.stdout.on('data', (data) => (title += data.toString()));
-    await new Promise((resolve) => titleProcess.on('close', resolve));
+    titleProcess.stdout.on('data', d => title += d.toString());
+    await new Promise(r => titleProcess.on('close', r));
 
-    const safeTitle = (title || 'media').replace(/[^a-zA-Z0-9\-_\.]/g, '_').slice(0, 80);
+    const safeTitle = (title.trim() || 'media').replace(/[^a-zA-Z0-9\-_\.]/g, '_').slice(0, 80);
     const ext = type === 'audio' ? 'mp3' : 'mp4';
-
     res.header('Content-Disposition', `attachment; filename="${safeTitle}.${ext}"`);
     res.header('Content-Type', type === 'audio' ? 'audio/mpeg' : 'video/mp4');
 
-    // Build Arguments
     let formatArgs = [];
-
     if (type === 'audio') {
-      // Audio Logic
-      // If user selected 'bestaudio', we let yt-dlp choose.
-      // If they selected a specific ID (e.g. '140'), we use that input format 
-      // BUT we still want to convert to MP3 for compatibility if possible.
-
       const formatSelection = quality === 'bestaudio' ? 'bestaudio' : quality;
-
-      formatArgs = [
-        '-x', // Extract audio
-        '--audio-format', 'mp3',
-        '--audio-quality', '0', // Best conversion quality
-        '-f', formatSelection
-      ];
+      formatArgs = ['-x', '--audio-format', 'mp3', '--audio-quality', '0', '-f', formatSelection];
     } else {
-      // Video Logic
       const fArg = quality ? `-f ${quality}+bestaudio[ext=m4a]/best[ext=mp4]/best` : '-f best[ext=mp4]/best';
       formatArgs = fArg.split(' ');
     }
 
-    // 1. Get approximate file size for progress bar
-    const sizeArgs = [
-      ...commonArgs,
-      ...formatArgs,
-      '--print', 'filesize_approx',
-      url
-    ];
-
-    try {
-      const sizeProcess = spawn(YTDLP_BIN, sizeArgs, { cwd: path.dirname(process.argv[1]) });
-      let sizeOutput = '';
-      sizeProcess.stdout.on('data', (data) => (sizeOutput += data.toString()));
-      await new Promise((resolve) => sizeProcess.on('close', resolve));
-
-      const size = parseInt(sizeOutput.trim());
-      if (!isNaN(size) && size > 0) {
-        res.setHeader('Content-Length', size);
-      }
-    } catch (e) {
-      // Ignore size error
-    }
-
-    const downloadArgs = [
-      ...commonArgs,
-      ...formatArgs,
-      '-o', '-',
-    ];
-
-    const downloadProcess = spawn(YTDLP_BIN, [...downloadArgs, url], {
-      cwd: path.dirname(process.argv[1]),
-    });
+    const finalArgs = [...downloadArgs, ...formatArgs, '-o', '-', url];
+    const downloadProcess = spawn(YTDLP_BIN, finalArgs, { cwd: path.dirname(process.argv[1]) });
 
     downloadProcess.stdout.pipe(res);
-    downloadProcess.stderr.on('data', (data) => console.error('yt-dlp stderr:', data.toString()));
-
+    downloadProcess.stderr.on('data', d => console.error('DL stderr:', d.toString()));
     req.on('close', () => downloadProcess.kill('SIGKILL'));
-  } catch (err) {
-    console.error('Download error:', err);
-    res.status(500).json({ error: 'Failed to download media.' });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).end();
   }
 });
 
