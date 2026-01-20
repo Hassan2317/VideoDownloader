@@ -57,7 +57,25 @@ const commonArgs = [
   '--force-ipv4', // CRITICAL: Data centers often have blocked IPv6 ranges
   '--geo-bypass',
   '--sleep-requests', '1', // Bit slower to avoid triggering bot detection
+  '--sleep-requests', '1',
 ];
+
+// Add Proxy if present
+if (process.env.YTDLP_PROXY) {
+  console.log('Using Proxy from environment variable.');
+  commonArgs.push('--proxy', process.env.YTDLP_PROXY);
+}
+
+// Add PO Token / Visitor Data if present (Bypasses bot checks)
+if (process.env.YTDLP_PO_TOKEN && process.env.YTDLP_VISITOR_DATA) {
+  console.log('Using PO Token & Visitor Data.');
+  // Add to extractor args. NOTE: If retrying with strategies, this might need to be applied there too.
+  // But since it's a bypass, we probably want it Global or in the "Web" strategy.
+  // For now, let's add it to commonArgs so it applies to everything (except where we might override it).
+  // Actually, po_token is specific to the 'youtube' extractor.
+  commonArgs.push('--extractor-args', `youtube:po_token=${process.env.YTDLP_PO_TOKEN};visitor_data=${process.env.YTDLP_VISITOR_DATA}`);
+}
+
 
 // Add runtime arguments only if on Windows using local binary that might need it, 
 // or if we know the environment supports it.
